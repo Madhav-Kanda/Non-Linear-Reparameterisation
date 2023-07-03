@@ -226,6 +226,8 @@ class nuts:
     ) -> SamplingAlgorithm:
         kernel = cls.build_kernel(integrator, divergence_threshold, max_num_doublings)
 
+        # print("Entered here!")
+
         def init_fn(position: ArrayLikeTree):
             return cls.init(position, logdensity_fn)
 
@@ -237,7 +239,7 @@ class nuts:
                 step_size,
                 inverse_mass_matrix,
             )
-
+        # print("Entered the step_fn")
         return SamplingAlgorithm(init_fn, step_fn)
 
 

@@ -124,12 +124,15 @@ def mass_matrix_adaptation(
 
         """
         inverse_mass_matrix, wc_state = mm_state
+        # jax.debug.print("Old_Position: {position}", position=position)
         position, _ = jax.flatten_util.ravel_pytree(position)
+        # print("Before position")
+        print(position)
+        # jax.debug.print("Position: {position}", position=position)
         wc_state = wc_update(wc_state, position)
         return MassMatrixAdaptationState(inverse_mass_matrix, wc_state)
 
-
-    def final(mm_state: MassMatrixAdaptationState,running_samples) -> MassMatrixAdaptationState:
+    def final(mm_state: MassMatrixAdaptationState) -> MassMatrixAdaptationState:
         """Final iteration of the mass matrix adaptation.
 
         In this step we compute the mass matrix from the covariance matrix computed
@@ -138,11 +141,10 @@ def mass_matrix_adaptation(
         """
         _, wc_state = mm_state
         covariance, count, mean = wc_final(wc_state)
-        jax.debug.print("final:{running_samples}", running_samples = running_samples[75:100, :])
-
 
         # Regularize the covariance matrix, see Stan
         scaled_covariance = (count / (count + 5)) * covariance
+        # value = jax.debug.print("Scaled covariance: {scaled_covariance}",scaled_covariance = scaled_covariance)
         shrinkage = 1e-3 * (5 / (count + 5))
         if is_diagonal_matrix:
             inverse_mass_matrix = scaled_covariance + shrinkage
@@ -152,6 +154,10 @@ def mass_matrix_adaptation(
             )
 
         ndims = jnp.shape(inverse_mass_matrix)[-1]
+
+        # import numpy as np
+        # jax.debug.print("Inverse mass matrix: {inverse_mass_matrix}",inverse_mass_matrix = inverse_mass_matrix)
+        # print('hello')
         new_mm_state = MassMatrixAdaptationState(inverse_mass_matrix, wc_init(ndims))
 
         return new_mm_state
@@ -237,7 +243,6 @@ def welford_algorithm(is_diagonal_matrix: bool) -> tuple[Callable, Callable, Cal
     ) -> tuple[Array, int, Array]:
         mean, m2, sample_size = wa_state
         covariance = m2 / (sample_size - 1)
-        # jax.debug.print("mean : {mean}, covariance: {covariance}, sample_size: {sample_size}", mean = mean, covariance = covariance, sample_size = sample_size)
         return covariance, sample_size, mean
 
     return init, update, final
