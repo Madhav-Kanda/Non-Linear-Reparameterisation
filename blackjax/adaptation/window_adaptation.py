@@ -138,13 +138,6 @@ def base(
         compared to the covariance estimation with Welford's algorithm
 
         """
-        # fast_update_samples.append(jax.device_put(position))
-        # new_sample = jax.device_put(position)
-
-        # info_samples.append(position)
-        # jax.debug.print("position: {position}", position = position)
-        # jax.debug.print("running_samples: {running_samples}", running_samples = running_samples)
-
         del position
 
         new_ss_state = da_update(warmup_state.ss_state, acceptance_rate)
@@ -183,24 +176,22 @@ def base(
         # values = jnp.array([position['mu'],position['tau'],position['theta_base']])
         running_samples = running_samples.at[i,0].set(position['mu'])
         running_samples = running_samples.at[i,1].set(position['tau'])
-        running_samples = running_samples.at[i,2:10].set(position['theta_base'])
+        running_samples = running_samples.at[i,2:10].set(position['theta'])
     
         return WindowAdaptationState(
             new_ss_state, new_imm_state, new_step_size, warmup_state.inverse_mass_matrix
         ), running_samples,i
 
-    def slow_final(warmup_state: WindowAdaptationState, running_samples):
+    def slow_final(warmup_state: WindowAdaptationState, running_samples, i):
         """Update the parameters at the end of a slow adaptation window.
 
         We compute the value of the mass matrix and reset the mass matrix
         adapation's internal state since middle windows are "memoryless".
 
         """
-        new_imm_state = mm_final(warmup_state.imm_state, running_samples)
+        new_imm_state = mm_final(warmup_state.imm_state, running_samples, i)
         new_ss_state = da_init(da_final(warmup_state.ss_state))
         new_step_size = jnp.exp(new_ss_state.log_step_size)
-
-        
 
 
         # jax.debug.print("running_samples: {running_samples}", running_samples = running_samples)
@@ -210,7 +201,7 @@ def base(
             new_imm_state,
             new_step_size,
             new_imm_state.inverse_mass_matrix,
-        ), running_samples
+        ), running_samples, i
 
     def update(
         adaptation_state: WindowAdaptationState,
@@ -239,9 +230,6 @@ def base(
 
         """
         stage, is_middle_window_end = adaptation_stage
-
-# """ I wish to store the positions of the chain in a list and then use them to compute the covariance matrix."""
-        # print(position)
         warmup_state, running_samples,i = jax.lax.switch(
             stage,
             (fast_update, slow_update),
@@ -262,11 +250,11 @@ def base(
         # warmup_state = modified_warmup_state(stage, fast_update, slow_update, position, acceptance_rate, adaptation_state)
 
         ## Need to update the is_middle_window_end condition !!
-        warmup_state, running_samples = jax.lax.cond(
+        warmup_state, running_samples,i = jax.lax.cond(
             is_middle_window_end,
             slow_final,
-            lambda x, y: (x, y),  # Updated lambda function to accept two arguments
-            warmup_state, running_samples
+            lambda x, y,i: (x, y,i),  # Updated lambda function to accept two arguments
+            warmup_state, running_samples,i
         )
         # warmup_state = jax.lax.cond(
         #     is_middle_window_end,
@@ -364,6 +352,7 @@ def window_adaptation(
         # jax.debug.print("running_samples: {running_samples}", running_samples = running_samples)
         # jax.debug.print("new_state: {new_state}", new_state = new_state.position['mu'])
             ## new_adaptation_state below is the new state of the adaptation parameters
+
         new_adaptation_state,running_samples,i = adapt_step(
             adaptation_state,
             adaptation_stage,
@@ -372,7 +361,11 @@ def window_adaptation(
             running_samples,
             i
         )
-    
+
+        # for i in range(10):
+            # new_adaptation_state,running_samples,i = adapt_step(adaptation_state,adaptation_stage,new_state.position,info.acceptance_rate,running_samples,i)
+
+
         return (
             ((new_state, new_adaptation_state), running_samples,i+1),
             AdaptationInfo(new_state, info, new_adaptation_state)
@@ -402,11 +395,19 @@ def window_adaptation(
 
         running_samples = jnp.zeros((num_steps,10))
         # print(running_samples)
-        (last_state,running_samples,i), info = jax.lax.scan(
-            one_step_,
-            ((init_state, init_adaptation_state),running_samples,0),
-            (jnp.arange(num_steps), keys, schedule)
-        )
+
+        ### Original ###
+        # (last_state,running_samples,i), info = jax.lax.scan(
+        #     one_step_,
+        #     ((init_state, init_adaptation_state),running_samples,0),
+        #     (jnp.arange(num_steps), keys, schedule)
+        # )
+
+        for i in range(num_steps):
+            (last_state,running_samples,i), info = one_step_(((init_state, init_adaptation_state),running_samples,i),(i, keys[i], schedule[i]))
+            init_state,init_adaptation_state = last_state
+
+
         # jax.debug.print("running_samples: {running_samples}", running_samples = running_samples)
         
         # jax.debug.print("info: {info}", info = info)
