@@ -374,9 +374,11 @@ def window_adaptation(
         )
         
         # Unconmment the following:
-        # if adaptation_stage.tolist() == [1,1]:
-        #     logdensity_f,initial_position = logdensity_create(model,centeredness,varname)
-
+        if adaptation_stage.tolist() == [1,1]:
+            logdensity_f,position = logdensity_create(model,centeredness,varname)
+            new_state = algorithm.init(position, logdensity_f)
+            new_adaptation_state = adapt_init(position, initial_step_size)
+            
         return (
             ((new_state, new_adaptation_state), running_samples),
             AdaptationInfo(new_state, info, new_adaptation_state),centeredness, logdensity_f
