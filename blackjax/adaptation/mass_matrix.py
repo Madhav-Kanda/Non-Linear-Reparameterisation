@@ -23,6 +23,7 @@ from typing import Callable, NamedTuple
 import jax
 import jax.numpy as jnp
 from jax.scipy.optimize import minimize
+import numpy as np
 import numpyro.distributions as dist
 from jax.nn import sigmoid
 
@@ -132,12 +133,12 @@ def mass_matrix_adaptation(
         wc_state = wc_update(wc_state, position)
         return MassMatrixAdaptationState(inverse_mass_matrix, wc_state)
 
-    def reparameterize_samples_dist(samples, c):
-        param_samples = samples[:,2:10].T
-        param_mean = samples[:,0]
-        param_std = jnp.exp(samples[:,1]) # Adding this extra transformation to get it back to constrained space!!
+    def reparameterize_samples_dist(samples, c, samples_keys):
 
-        # new_param_samples = jnp.expand_dims(c, axis=1) * jnp.expand_dims(param_mean, axis = 0)  + (param_samples - param_mean) * param_std ** (c - 1)
+        param_samples = jnp.array(samples[samples_keys[2]]).T
+        param_mean = jnp.array(samples['mu'])
+        param_std = jnp.exp(jnp.array(samples['tau']))
+        # print(param_samples.shape, param_mean.shape, param_std.shape)
         new_param_samples = jnp.expand_dims(c, axis=1) * jnp.expand_dims(param_mean, axis = 0)  + (param_samples - param_mean) * jnp.power(param_std, (c - 1)[:, jnp.newaxis])
 
         theta_mu = jnp.mean(new_param_samples, axis=1)
@@ -150,40 +151,41 @@ def mass_matrix_adaptation(
 
 
     def log_jacobian(samples, c):
-        sigma = jnp.exp(samples[:,1]) # Adding this extra transformation to get it back to constrained space!!
+        sigma = jnp.exp(jnp.array(samples['tau']))
         logJ = jnp.sum(jnp.log(sigma) * (1 - c[:, jnp.newaxis]))
         logJ /= len(sigma)
         return logJ
 
-    def kl_value_constrained(centeredness,samples):
-        reparam_sample, mvn, mu_theta, std_theta = reparameterize_samples_dist(samples, sigmoid(centeredness))
+
+    def kl_value_constrained(centeredness,samples, samples_keys):
+        reparam_sample, mvn, mu_theta, std_theta = reparameterize_samples_dist(samples, sigmoid(centeredness), samples_keys)
         jacobian_log = log_jacobian(samples, sigmoid(centeredness))
-        kl = -mvn.log_prob(reparam_sample.T).mean() + jacobian_log    
-        # jax.debug.print("centeredness:{centeredness}, kl:{kl}", centeredness = centeredness, kl = kl)   
+        kl = -mvn.log_prob(reparam_sample.T).mean() + jacobian_log        
         return kl  
 
-    def best_centered_cov(samples,c):
-        param_samples = samples[:,2:10].T
-        param_mean = samples[:,0]
-        param_std = jnp.exp(samples[:,1]) # Adding this extra transformation to get it back to constrained space!!
+    def best_centered_cov(samples,c,samples_keys):
+        param_samples = jnp.array(samples[samples_keys[2]]).T
+        param_mean = jnp.array(samples['mu'])
+        param_std = jnp.exp(jnp.array(samples['tau'])) # Adding this extra transformation to get it back to constrained space!!
 
-        # new_param_samples = jnp.expand_dims(c, axis=1) * jnp.expand_dims(param_mean, axis = 0)  + (param_samples - param_mean) * param_std ** (c - 1)
         new_param_samples = jnp.expand_dims(c, axis=1) * jnp.expand_dims(param_mean, axis = 0)  + (param_samples - param_mean) * jnp.power(param_std, (c - 1)[:, jnp.newaxis])
-        # jax.debug.print("param_samples:{param_samples}", param_samples = param_samples.T)
-        # jax.debug.print("new_param_samples:{new_param_samples}", new_param_samples = new_param_samples)
         std_samples = jnp.std(new_param_samples, axis=1, ddof = 1)
         std_mean = jnp.std(param_mean, ddof = 1)
         std_sd = jnp.std(jnp.log(param_std),ddof=1)
 
-        # Hard coding!!
-        std = jnp.zeros(10)
-        std = std.at[0].set(std_mean)
-        std = std.at[1].set(std_sd)
-        std = std.at[2:].set(std_samples)
-        return (std**2)
         
+        # std = jnp.array([std_mean,std_sd,std_samples])
+        std = np.zeros(2+ std_samples.size)
+        for i in range(2+ std_samples.size):
+            if i < std_mean.size:
+                std[i] = std_mean
+            elif i < std_mean.size+ std_sd.size:
+                std[i] = std_sd
+            else:
+                std[i] = std_samples[i-2]
+        return (std**2)
 
-    def final(mm_state: MassMatrixAdaptationState,running_samples,i) -> MassMatrixAdaptationState:
+    def final(mm_state: MassMatrixAdaptationState,running_samples,centeredness, varname) -> MassMatrixAdaptationState:
         """Final iteration of the mass matrix adaptation.
 
         In this step we compute the mass matrix from the covariance matrix computed
@@ -192,20 +194,16 @@ def mass_matrix_adaptation(
         """
         _, wc_state = mm_state
         covariance, count, mean = wc_final(wc_state)
-      
-        cov_samples = running_samples[75:100,:]
-      
-        center_initial = jnp.array([0.3, 0.4, 0.5, 0.1, 0.5, 0.6, 0.7, 0.8])
 
-        # jax.debug.print("cov_samples:{cov_samples}", cov_samples = covariance)
+        if centeredness is None:
+            centeredness = jnp.array([0.3, 0.4, 0.5, 0.1, 0.5, 0.6, 0.7, 0.8])
+        
+        samples_keys = list(running_samples.keys())
 
-        kl_value_ = lambda x: kl_value_constrained(x, cov_samples)
-        res = minimize(kl_value_, center_initial, method='BFGS')
-
-        best_c_jax = sigmoid(res.x)
-        covariance = best_centered_cov(cov_samples, best_c_jax)
-        # jax.debug.print("covariance_calculated:{covariance}", covariance = covariance)
-      
+        kl_value_ = lambda x: kl_value_constrained(x, running_samples,samples_keys,)
+        res = minimize(kl_value_, centeredness, method='BFGS')
+        centeredness = sigmoid(res.x)
+        covariance = best_centered_cov(running_samples,centeredness,samples_keys)
 
         # Regularize the covariance matrix, see Stan
         scaled_covariance = (count / (count + 5)) * covariance
@@ -220,8 +218,9 @@ def mass_matrix_adaptation(
         # jax.debug.print("inverse_mass_matrix:{inverse_mass_matrix}", inverse_mass_matrix = inverse_mass_matrix)
         ndims = jnp.shape(inverse_mass_matrix)[-1]
         new_mm_state = MassMatrixAdaptationState(inverse_mass_matrix, wc_init(ndims))
+        varname = samples_keys[2]
 
-        return new_mm_state
+        return new_mm_state, centeredness, varname
 
     return init, update, final
 
