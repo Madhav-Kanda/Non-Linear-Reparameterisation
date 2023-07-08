@@ -17,6 +17,7 @@ from typing import Callable, NamedTuple, Union
 import jax
 import jax.numpy as jnp
 import numpy as np
+from time import perf_counter
 
 
 import blackjax.mcmc as mcmc
@@ -193,14 +194,14 @@ def base(
             new_ss_state, new_imm_state, new_step_size, warmup_state.inverse_mass_matrix
         ), running_samples
 
-    def slow_final(warmup_state: WindowAdaptationState, running_samples,centeredness, varname):
+    def slow_final(warmup_state: WindowAdaptationState, running_samples,centeredness, varname, prev_c):
         """Update the parameters at the end of a slow adaptation window.
 
         We compute the value of the mass matrix and reset the mass matrix
         adapation's internal state since middle windows are "memoryless".
 
         """
-        new_imm_state,centeredness,varname = mm_final(warmup_state.imm_state, running_samples,centeredness, varname)
+        new_imm_state,centeredness,varname,prev_c = mm_final(warmup_state.imm_state, running_samples,centeredness, varname, prev_c)
         new_ss_state = da_init(da_final(warmup_state.ss_state))
         new_step_size = jnp.exp(new_ss_state.log_step_size)
 
@@ -211,14 +212,14 @@ def base(
             new_imm_state,
             new_step_size,
             new_imm_state.inverse_mass_matrix,
-        ), running_samples, centeredness, varname
+        ), running_samples, centeredness, varname, prev_c
 
     def update(
         adaptation_state: WindowAdaptationState,
         adaptation_stage: tuple,
         position: ArrayLikeTree,
         acceptance_rate: float,
-        running_samples, centeredness, varname
+        running_samples, centeredness, varname, prev_c
     ) -> WindowAdaptationState:
         """Update the adaptation state and parameter values.
 
@@ -272,9 +273,9 @@ def base(
         #     warmup_state, running_samples,i
         # )
         if is_middle_window_end:
-            warmup_state, running_samples,centeredness,varname = slow_final(warmup_state, running_samples,centeredness, varname)
+            warmup_state, running_samples,centeredness,varname, prev_c = slow_final(warmup_state, running_samples,centeredness, varname, prev_c)
 
-        return warmup_state, running_samples, centeredness, varname
+        return warmup_state, running_samples, centeredness, varname, prev_c
 
     def final(warmup_state: WindowAdaptationState) -> tuple[float, Array]:
         """Return the final values for the step size and mass matrix."""
@@ -331,15 +332,13 @@ def window_adaptation(
     A function that runs the adaptation and returns an `AdaptationResult` object.
 
     """
-
     def logdensity_create(model, centeredness = None, varname = None):
         if centeredness is not None:
             model = reparam(model, config={varname: LocScaleReparam(centered= centeredness)})
         init_params, potential_fn_gen, *_ = initialize_model(jax.random.PRNGKey(0),model,dynamic_args=True)
         logdensity_fn = lambda position: -potential_fn_gen()(position)
         initial_position = init_params.z
-        return logdensity_fn, initial_position
-
+        return jax.jit(logdensity_fn), initial_position
 
     mcmc_kernel = algorithm.build_kernel()
     adapt_init, adapt_step, adapt_final = base(
@@ -347,12 +346,10 @@ def window_adaptation(
         target_acceptance_rate=target_acceptance_rate,
     )
 
-
-    def one_step(carry, xs, centeredness,logdensity_f):
+    def one_step(carry, xs, centeredness,logdensity_f, prev_c,varname):
         _, rng_key, adaptation_stage = xs
         (state, adaptation_state),running_samples = carry
 
-        ## new_state below is the new state of the chain
         new_state, info = mcmc_kernel(
             rng_key,
             state,
@@ -361,27 +358,25 @@ def window_adaptation(
             adaptation_state.inverse_mass_matrix,
             **extra_parameters,
         )
-
-        ## pass the logdensity_fn inside this function and change it post the slow_final update
-        ## But need to find someway to reparameterise it!
-        varname = 'theta'
-        new_adaptation_state,running_samples, centeredness,varname = adapt_step(
+      
+        new_adaptation_state,running_samples, centeredness,varname, prev_c = adapt_step(
             adaptation_state,
             adaptation_stage,
             new_state.position,
             info.acceptance_rate,
-            running_samples, centeredness, varname
+            running_samples, centeredness, varname, prev_c
         )
         
         # Unconmment the following:
         if adaptation_stage.tolist() == [1,1]:
             logdensity_f,position = logdensity_create(model,centeredness,varname)
+            # print("New: ",logdensity_f)
             new_state = algorithm.init(position, logdensity_f)
             new_adaptation_state = adapt_init(position, initial_step_size)
             
         return (
             ((new_state, new_adaptation_state), running_samples),
-            AdaptationInfo(new_state, info, new_adaptation_state),centeredness, logdensity_f
+            AdaptationInfo(new_state, info, new_adaptation_state),centeredness, logdensity_f, prev_c, varname
         )
 
     def run(rng_key: PRNGKey, num_steps: int = 1000, **kwargs):
@@ -415,8 +410,11 @@ def window_adaptation(
         #     (jnp.arange(num_steps), keys, schedule)
         # )
         centeredness = None
+        prev_c = None
+        varname = 'theta'
+
         for i in range(num_steps):
-            (last_state,running_samples), info, centeredness,logdensity_ = one_step(((init_state, init_adaptation_state),running_samples),(i, keys[i], schedule[i]), centeredness, logdensity_fn)
+            (last_state,running_samples), info, centeredness,logdensity_, prev_c,varname = one_step(((init_state, init_adaptation_state),running_samples),(i, keys[i], schedule[i]), centeredness, logdensity_fn, prev_c,varname)
             logdensity_fn = logdensity_
             init_state,init_adaptation_state = last_state
 
