@@ -16,9 +16,6 @@ from typing import Callable, NamedTuple, Union
 
 import jax
 import jax.numpy as jnp
-import numpy as np
-from time import perf_counter
-
 
 import blackjax.mcmc as mcmc
 from numpyro.infer.util import initialize_model
@@ -108,7 +105,6 @@ def base(
     mm_init, mm_update, mm_final = mass_matrix_adaptation(is_mass_matrix_diagonal)
     da_init, da_update, da_final = dual_averaging_adaptation(target_acceptance_rate)
 
-
     def init(
         position: ArrayLikeTree, initial_step_size: float
     ) -> WindowAdaptationState:
@@ -128,14 +124,13 @@ def base(
             ss_state,
             imm_state,
             initial_step_size,
-            imm_state.inverse_mass_matrix
+            imm_state.inverse_mass_matrix,
         )
 
     def fast_update(
         position: ArrayLikeTree,
         acceptance_rate: float,
         warmup_state: WindowAdaptationState,
-        running_samples
     ) -> WindowAdaptationState:
         """Update the adaptation state when in a "fast" window.
 
@@ -153,28 +148,15 @@ def base(
             new_ss_state,
             warmup_state.imm_state,
             new_step_size,
-            warmup_state.inverse_mass_matrix
-        ),running_samples
-
-
-    def append_element(running_samples,position):
-        if bool(running_samples) == False:
-            for key in position.keys():
-                running_samples[key] = []
-                
-        for key in position.keys():
-            value = position[key]
-            running_samples[key].append(value.tolist())
-        return running_samples
+            warmup_state.inverse_mass_matrix,
+        )
 
     def slow_update(
         position: ArrayLikeTree,
         acceptance_rate: float,
         warmup_state: WindowAdaptationState,
-        running_samples
     ) -> WindowAdaptationState:
         """Update the adaptation state when in a "slow" window.
-    
 
         Both the mass matrix adaptation *state* and the step size state are
         adapted in slow windows. The value of the step size is updated as well,
@@ -184,42 +166,20 @@ def base(
         value of the mass matrix.
 
         """
-
         new_imm_state = mm_update(warmup_state.imm_state, position)
         new_ss_state = da_update(warmup_state.ss_state, acceptance_rate)
         new_step_size = jnp.exp(new_ss_state.log_step_size)
 
-        running_samples = append_element(running_samples,position)
         return WindowAdaptationState(
             new_ss_state, new_imm_state, new_step_size, warmup_state.inverse_mass_matrix
-        ), running_samples
+        )
 
-    def slow_final(warmup_state: WindowAdaptationState, running_samples,centeredness, prev_c):
-        """Update the parameters at the end of a slow adaptation window.
-
-        We compute the value of the mass matrix and reset the mass matrix
-        adapation's internal state since middle windows are "memoryless".
-
-        """
-        new_imm_state,centeredness, prev_c = mm_final(warmup_state.imm_state, running_samples,centeredness, prev_c)
-        new_ss_state = da_init(da_final(warmup_state.ss_state))
-        new_step_size = jnp.exp(new_ss_state.log_step_size)
-
-        running_samples = {}
-
-        return WindowAdaptationState(
-            new_ss_state,
-            new_imm_state,
-            new_step_size,
-            new_imm_state.inverse_mass_matrix,
-        ), running_samples, centeredness, prev_c
 
     def update(
         adaptation_state: WindowAdaptationState,
         adaptation_stage: tuple,
         position: ArrayLikeTree,
         acceptance_rate: float,
-        running_samples, centeredness, prev_c
     ) -> WindowAdaptationState:
         """Update the adaptation state and parameter values.
 
@@ -241,41 +201,23 @@ def base(
 
         """
         stage, is_middle_window_end = adaptation_stage
-        # warmup_state, running_samples,i = jax.lax.switch(
-        #     stage,
-        #     (fast_update, slow_update),
-        #     position,
-        #     acceptance_rate,
-        #     adaptation_state,
-        #     running_samples,i
-        # )
 
-        if stage == 0:
-            warmup_state, running_samples = fast_update(
-                position,
-                acceptance_rate,
-                adaptation_state,
-                running_samples
-            )
-        else:
-            warmup_state, running_samples = slow_update(
-                position,
-                acceptance_rate,
-                adaptation_state,
-                running_samples
-            )
+        warmup_state = jax.lax.switch(
+            stage,
+            (fast_update, slow_update),
+            position,
+            acceptance_rate,
+            adaptation_state,
+        )
 
-        ## Need to update the is_middle_window_end condition !!
-        # warmup_state, running_samples,i = jax.lax.cond(
+        # warmup_state = jax.lax.cond(
         #     is_middle_window_end,
         #     slow_final,
-        #     lambda x, y,i: (x, y,i),  # Updated lambda function to accept two arguments
-        #     warmup_state, running_samples,i
+        #     lambda x: x,
+        #     warmup_state,
         # )
-        if is_middle_window_end:
-            warmup_state, running_samples,centeredness, prev_c = slow_final(warmup_state, running_samples,centeredness, prev_c)
 
-        return warmup_state, running_samples, centeredness, prev_c
+        return warmup_state
 
     def final(warmup_state: WindowAdaptationState) -> tuple[float, Array]:
         """Return the final values for the step size and mass matrix."""
@@ -332,94 +274,120 @@ def window_adaptation(
     A function that runs the adaptation and returns an `AdaptationResult` object.
 
     """
+    
     def logdensity_create(model, centeredness = None, varname = None):
         if centeredness is not None:
             model = reparam(model, config={varname: LocScaleReparam(centered= centeredness)})
-            # print("Varname: ",varname)
+          
         init_params, potential_fn_gen, *_ = initialize_model(jax.random.PRNGKey(0),model,dynamic_args=True)
-        logdensity_fn = lambda position: -potential_fn_gen()(position)
+        logdensity = lambda position: -potential_fn_gen()(position)
         initial_position = init_params.z
-        return jax.jit(logdensity_fn), initial_position
+        return (logdensity, initial_position)
+    
+    # def logdensity_create(model, centeredness=None, varname=None):
+    #     def logdensity(position):
+    #         if centeredness is not None:
+    #             model_reparam = reparam(model, config={varname: LocScaleReparam(centered=centeredness)})
+    #         else:
+    #             model_reparam = model
+
+    #         init_params, potential_fn_gen, *_ = initialize_model(jax.random.PRNGKey(0), model_reparam, dynamic_args=True)
+    #         logdensity_value = -potential_fn_gen()(position)
+    #         initial_position = init_params.z
+    #         return logdensity_value, initial_position
+    #     return logdensity
 
     mcmc_kernel = algorithm.build_kernel()
+    (logdensity_fn, position) = logdensity_create(model)
     adapt_init, adapt_step, adapt_final = base(
         is_mass_matrix_diagonal,
         target_acceptance_rate=target_acceptance_rate,
     )
+    mm_init, mm_update, mm_final = mass_matrix_adaptation(is_mass_matrix_diagonal)
+    da_init, da_update, da_final = dual_averaging_adaptation(target_acceptance_rate)
 
-    def one_step(carry, xs, centeredness,logdensity_f, prev_c,varname):
+    def slow_final(warmup_state: WindowAdaptationState, samples,c, prev_c) -> WindowAdaptationState:
+        """Update the parameters at the end of a slow adaptation window.
+
+        We compute the value of the mass matrix and reset the mass matrix
+        adapation's internal state since middle windows are "memoryless".
+
+        """
+        new_imm_state, centeredness, prev_c = mm_final(warmup_state.imm_state, samples,c, prev_c)
+        new_ss_state = da_init(da_final(warmup_state.ss_state))
+        new_step_size = jnp.exp(new_ss_state.log_step_size)
+
+        return WindowAdaptationState(
+            new_ss_state,
+            new_imm_state,
+            new_step_size,
+            new_imm_state.inverse_mass_matrix,
+        ), centeredness, prev_c
+
+    def one_step(carry, xs):
         _, rng_key, adaptation_stage = xs
-        (state, adaptation_state),running_samples = carry
+        state, adaptation_state, logdensity_fn = carry
 
         new_state, info = mcmc_kernel(
             rng_key,
             state,
-            logdensity_f,
+            logdensity_fn,
             adaptation_state.step_size,
             adaptation_state.inverse_mass_matrix,
             **extra_parameters,
         )
-      
-        new_adaptation_state,running_samples, centeredness, prev_c = adapt_step(
+        new_adaptation_state = adapt_step(
             adaptation_state,
             adaptation_stage,
             new_state.position,
             info.acceptance_rate,
-            running_samples, centeredness, prev_c
         )
-        
-        # Unconmment the following:
-        if adaptation_stage.tolist() == [1,1]:
-            logdensity_f,position = logdensity_create(model,centeredness,varname)
-            # print("New: ",logdensity_f)
-            new_state = algorithm.init(position, logdensity_f)
-            new_adaptation_state = adapt_init(position, initial_step_size)
-            
+
+        # new_adaptation_state --> warmup_state
+
         return (
-            ((new_state, new_adaptation_state), running_samples),
-            AdaptationInfo(new_state, info, new_adaptation_state),centeredness, logdensity_f, prev_c
+            (new_state, new_adaptation_state),
+            AdaptationInfo(new_state, info, new_adaptation_state),
         )
 
-    def run(rng_key: PRNGKey, num_steps: int = 1000, **kwargs):
-        logdensity_fn, initial_position = logdensity_create(model)
-        position = initial_position
+    def run(rng_key: PRNGKey, num_steps: int = 1000):
+        (logdensity_fn, position) = logdensity_create(model)
         init_state = algorithm.init(position, logdensity_fn)
-        if(kwargs.get("initial_step_size") is None):
-            init_adaptation_state = adapt_init(position, initial_step_size)
-        else:
-            init_adaptation_state = adapt_init(position, kwargs.get("initial_step_size"))
+        init_adaptation_state = adapt_init(position, initial_step_size)
 
-        keys_list = list(position)
-        varname = keys_list[2]
-        # if progress_bar:
-        #     one_step_ = jax.jit(progress_bar_scan(num_steps)(one_step))
-        # else:
-        #     one_step_ = jax.jit(one_step)
+        if progress_bar:
+            print("Running window adaptation")
+            one_step_ = jax.jit(progress_bar_scan(num_steps)(one_step))
+        else:
+            one_step_ = jax.jit(one_step)
 
         keys = jax.random.split(rng_key, num_steps)
-        info = None
-        if len(kwargs) > 1:
-            schedule = build_schedule(num_steps, kwargs.get("initial_buffer_size"), kwargs.get("final_buffer_size"), kwargs.get("first_window_size"))
-        else:
-            schedule = build_schedule(num_steps)
-
-        running_samples = {}
-
-        ### Original ###
-        # (last_state,running_samples,i), info = jax.lax.scan(
-        #     one_step_,
-        #     ((init_state, init_adaptation_state),running_samples,0),
-        #     (jnp.arange(num_steps), keys, schedule)
-        # )
-        centeredness = None
+        schedule = build_schedule(num_steps)
+        step = 0
         prev_c = None
+        centeredness = None
+        window_size = jnp.array([(75,0),(25,1),(50,1),(100,1),(200,1),(50,0)])
+        for window in window_size:
+            last_state, info = jax.lax.scan(
+                one_step_,
+                (init_state, init_adaptation_state, logdensity_fn),
+                (jnp.arange(step, step+window[0]), keys[step:][:window[0]], schedule[step:][:window[0]]),
+            )
+            step+=window[0]
 
-        for i in range(num_steps):
-            (last_state,running_samples), info, centeredness,logdensity_, prev_c = one_step(((init_state, init_adaptation_state),running_samples),(i, keys[i], schedule[i]), centeredness, logdensity_fn, prev_c,varname)
-            logdensity_fn = logdensity_
-            init_state,init_adaptation_state = last_state
-            # print(info)
-
+            init_state = last_state[0]
+            init_adaptation_state = last_state[1]
+            if(window[1]==1):
+                prev_c = centeredness
+                init_adaptation_state, centeredness, prev_c = slow_final(last_state[1],info[0][0],centeredness,prev_c)
+                
+                varname = list(info[0][0].keys())[2]
+                logdensity_f,position_new = logdensity_create(model,centeredness,varname)
+                # print("New: ",logdensity_f)
+                init_state = algorithm.init(position_new, logdensity_f)
+                init_adaptation_state = adapt_init(position_new, initial_step_size)
+                logdensity_fn = logdensity_f
+        
         last_chain_state, last_warmup_state, *_ = last_state
 
         step_size, inverse_mass_matrix = adapt_final(last_warmup_state)
@@ -429,14 +397,12 @@ def window_adaptation(
             **extra_parameters,
         }
 
-        # kernel = mcmc.nuts(logdensity_fn, parameters).step
-
         return (
             AdaptationResults(
                 last_chain_state,
                 parameters,
             ),
-            info, logdensity_fn
+            info,logdensity_fn
         )
 
     return AdaptationAlgorithm(run)
@@ -507,8 +473,8 @@ def build_schedule(
             first_window_size = num_steps - initial_buffer_size - final_buffer_size
 
         # First stage: adaptation of fast parameters
-        schedule += [(0, False)] * (initial_buffer_size)
-        # schedule.append((0, False))
+        schedule += [(0, False)] * (initial_buffer_size - 1)
+        schedule.append((0, False))
 
         # Second stage: adaptation of slow parameters in successive windows
         # doubling in size.
@@ -527,8 +493,8 @@ def build_schedule(
             schedule.append((1, True))
 
         # Last stage: adaptation of fast parameters
-        schedule += [(0, False)] * (num_steps - final_buffer_start)
-        # schedule.append((0, False))
+        schedule += [(0, False)] * (num_steps - 1 - final_buffer_start)
+        schedule.append((0, False))
 
     schedule = jnp.array(schedule)
 
