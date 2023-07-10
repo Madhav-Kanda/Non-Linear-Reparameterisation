@@ -184,7 +184,7 @@ def mass_matrix_adaptation(
                 std[i] = std_samples[i-2]
         return (std**2)
 
-    def final(mm_state: MassMatrixAdaptationState,running_samples,centeredness, varname,prev_c) -> MassMatrixAdaptationState:
+    def final(mm_state: MassMatrixAdaptationState,running_samples,centeredness, prev_c) -> MassMatrixAdaptationState:
         """Final iteration of the mass matrix adaptation.
 
         In this step we compute the mass matrix from the covariance matrix computed
@@ -195,8 +195,7 @@ def mass_matrix_adaptation(
         covariance, count, mean = wc_final(wc_state)
 
         if centeredness is None:
-            shape = jnp.shape(running_samples[varname][0])
-            centeredness = jax.random.normal(jax.random.PRNGKey(0) , shape)
+            centeredness = jax.random.normal(jax.random.PRNGKey(0) , shape = (8,))
         
         if prev_c is None:
             prev_c = jnp.ones(centeredness.shape)
@@ -207,10 +206,6 @@ def mass_matrix_adaptation(
         res = minimize(kl_value_, centeredness, method='BFGS')
         centeredness = sigmoid(res.x)
         covariance = best_centered_cov(running_samples,centeredness,samples_keys,prev_c)
-        # print("Centeredness: ", centeredness)
-        # print("Previous Centeredness: ", prev_c)
-        # print("Varname: ", varname)
-        # print("samples", running_samples)
         prev_c = centeredness
 
         # Regularize the covariance matrix, see Stan
@@ -226,10 +221,8 @@ def mass_matrix_adaptation(
         # jax.debug.print("inverse_mass_matrix:{inverse_mass_matrix}", inverse_mass_matrix = inverse_mass_matrix)
         ndims = jnp.shape(inverse_mass_matrix)[-1]
         new_mm_state = MassMatrixAdaptationState(inverse_mass_matrix, wc_init(ndims))
-        varname = samples_keys[2]
-        print("New varname:", varname)
 
-        return new_mm_state, centeredness, varname, prev_c
+        return new_mm_state, centeredness, prev_c
 
     return init, update, final
 

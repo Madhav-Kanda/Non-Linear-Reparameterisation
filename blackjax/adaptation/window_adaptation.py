@@ -194,14 +194,14 @@ def base(
             new_ss_state, new_imm_state, new_step_size, warmup_state.inverse_mass_matrix
         ), running_samples
 
-    def slow_final(warmup_state: WindowAdaptationState, running_samples,centeredness, varname, prev_c):
+    def slow_final(warmup_state: WindowAdaptationState, running_samples,centeredness, prev_c):
         """Update the parameters at the end of a slow adaptation window.
 
         We compute the value of the mass matrix and reset the mass matrix
         adapation's internal state since middle windows are "memoryless".
 
         """
-        new_imm_state,centeredness,varname,prev_c = mm_final(warmup_state.imm_state, running_samples,centeredness, varname, prev_c)
+        new_imm_state,centeredness, prev_c = mm_final(warmup_state.imm_state, running_samples,centeredness, prev_c)
         new_ss_state = da_init(da_final(warmup_state.ss_state))
         new_step_size = jnp.exp(new_ss_state.log_step_size)
 
@@ -212,14 +212,14 @@ def base(
             new_imm_state,
             new_step_size,
             new_imm_state.inverse_mass_matrix,
-        ), running_samples, centeredness, varname, prev_c
+        ), running_samples, centeredness, prev_c
 
     def update(
         adaptation_state: WindowAdaptationState,
         adaptation_stage: tuple,
         position: ArrayLikeTree,
         acceptance_rate: float,
-        running_samples, centeredness, varname, prev_c
+        running_samples, centeredness, prev_c
     ) -> WindowAdaptationState:
         """Update the adaptation state and parameter values.
 
@@ -273,9 +273,9 @@ def base(
         #     warmup_state, running_samples,i
         # )
         if is_middle_window_end:
-            warmup_state, running_samples,centeredness,varname, prev_c = slow_final(warmup_state, running_samples,centeredness, varname, prev_c)
+            warmup_state, running_samples,centeredness, prev_c = slow_final(warmup_state, running_samples,centeredness, prev_c)
 
-        return warmup_state, running_samples, centeredness, varname, prev_c
+        return warmup_state, running_samples, centeredness, prev_c
 
     def final(warmup_state: WindowAdaptationState) -> tuple[float, Array]:
         """Return the final values for the step size and mass matrix."""
@@ -335,6 +335,7 @@ def window_adaptation(
     def logdensity_create(model, centeredness = None, varname = None):
         if centeredness is not None:
             model = reparam(model, config={varname: LocScaleReparam(centered= centeredness)})
+            # print("Varname: ",varname)
         init_params, potential_fn_gen, *_ = initialize_model(jax.random.PRNGKey(0),model,dynamic_args=True)
         logdensity_fn = lambda position: -potential_fn_gen()(position)
         initial_position = init_params.z
@@ -359,12 +360,12 @@ def window_adaptation(
             **extra_parameters,
         )
       
-        new_adaptation_state,running_samples, centeredness,varname, prev_c = adapt_step(
+        new_adaptation_state,running_samples, centeredness, prev_c = adapt_step(
             adaptation_state,
             adaptation_stage,
             new_state.position,
             info.acceptance_rate,
-            running_samples, centeredness, varname, prev_c
+            running_samples, centeredness, prev_c
         )
         
         # Unconmment the following:
@@ -376,7 +377,7 @@ def window_adaptation(
             
         return (
             ((new_state, new_adaptation_state), running_samples),
-            AdaptationInfo(new_state, info, new_adaptation_state),centeredness, logdensity_f, prev_c, varname
+            AdaptationInfo(new_state, info, new_adaptation_state),centeredness, logdensity_f, prev_c
         )
 
     def run(rng_key: PRNGKey, num_steps: int = 1000, **kwargs):
@@ -388,7 +389,8 @@ def window_adaptation(
         else:
             init_adaptation_state = adapt_init(position, kwargs.get("initial_step_size"))
 
-
+        keys_list = list(position)
+        varname = keys_list[2]
         # if progress_bar:
         #     one_step_ = jax.jit(progress_bar_scan(num_steps)(one_step))
         # else:
@@ -411,12 +413,12 @@ def window_adaptation(
         # )
         centeredness = None
         prev_c = None
-        varname = 'theta'
 
         for i in range(num_steps):
-            (last_state,running_samples), info, centeredness,logdensity_, prev_c,varname = one_step(((init_state, init_adaptation_state),running_samples),(i, keys[i], schedule[i]), centeredness, logdensity_fn, prev_c,varname)
+            (last_state,running_samples), info, centeredness,logdensity_, prev_c = one_step(((init_state, init_adaptation_state),running_samples),(i, keys[i], schedule[i]), centeredness, logdensity_fn, prev_c,varname)
             logdensity_fn = logdensity_
             init_state,init_adaptation_state = last_state
+            # print(info)
 
         last_chain_state, last_warmup_state, *_ = last_state
 
