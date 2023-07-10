@@ -196,13 +196,12 @@ def mass_matrix_adaptation(
         if prev_c is None:
             prev_c = jnp.ones(centeredness.shape)
 
-
         samples_keys = list(samples.keys())
 
         kl_value_ = lambda x: kl_value_constrained(x, samples,samples_keys,prev_c)
         res = minimize(kl_value_, centeredness, method='BFGS')
         centeredness = sigmoid(res.x)
-        covariance = best_centered_cov(samples,centeredness,samples_keys,prev_c)
+        # covariance = best_centered_cov(samples,centeredness,samples_keys,prev_c)
 
         # Regularize the covariance matrix, see Stan
         scaled_covariance = (count / (count + 5)) * covariance
