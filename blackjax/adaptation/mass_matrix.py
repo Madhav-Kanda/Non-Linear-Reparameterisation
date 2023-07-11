@@ -131,47 +131,47 @@ def mass_matrix_adaptation(
         wc_state = wc_update(wc_state, position)
         return MassMatrixAdaptationState(inverse_mass_matrix, wc_state)
 
-    def log_jacobian(samples, c, prev_c):
-        sigma = jnp.exp(jnp.array(samples['tau']))
-        logJ = jnp.sum(jnp.log(sigma) * (1 - c[:, jnp.newaxis]))
-        logJ /= len(sigma)
+    def log_jacobian(samples, c, prev_c,samples_keys):
+        log_sigma = jnp.array(samples[samples_keys[1]])
+        logJ = jnp.sum(log_sigma * ((prev_c - c)[:, jnp.newaxis]))
+        logJ /= len(log_sigma)
         return logJ
 
 
     def kl_value_constrained(centeredness,samples, samples_keys,prev_c):
         reparam_sample, mvn, mu_theta, std_theta = reparameterize_samples_dist(samples, sigmoid(centeredness), samples_keys, prev_c)
-        jacobian_log = log_jacobian(samples, sigmoid(centeredness),prev_c)
+        jacobian_log = log_jacobian(samples, sigmoid(centeredness),prev_c,samples_keys)
         kl = -mvn.log_prob(reparam_sample.T).mean() + jacobian_log   
         # print("KL: ", kl)     
         return kl  
 
     def best_centered_cov(samples,c,samples_keys,prev_c):
         param_samples = jnp.array(samples[samples_keys[2]]).T
-        param_mean = jnp.array(samples['mu'])
-        param_std = jnp.exp(jnp.array(samples['tau'])) # Adding this extra transformation to get it back to constrained space!!
+        param_mean = jnp.array(samples[samples_keys[0]])
+        param_std = jnp.exp(jnp.array(samples[samples_keys[1]])) # Adding this extra transformation to get it back to constrained space!!
 
         new_param_samples = jnp.expand_dims(c, axis=1) * jnp.expand_dims(param_mean, axis = 0)  + (param_samples - (jnp.expand_dims(prev_c,axis=1)*jnp.expand_dims(param_mean, axis = 0))) * jnp.power(param_std, (c - prev_c)[:, jnp.newaxis])
         std_samples = jnp.std(new_param_samples, axis=1, ddof = 1)
         std_mean = jnp.std(param_mean, ddof = 1)
-        std_sd = jnp.std(jnp.log(param_std),ddof=1)
+        std_logsd = jnp.std(jnp.log(param_std),ddof=1)
         
         std = jnp.zeros(2+ std_samples.size)
         for i in range(2+ std_samples.size):
             if i < std_mean.size:
                 std = std.at[i].set(std_mean)
-            elif i < std_mean.size+ std_sd.size:
-                std = std.at[i].set(std_sd)
+            elif i < std_mean.size+ std_logsd.size:
+                std = std.at[i].set(std_logsd)
             else:
-                std = std.at[i-2].set(std_mean)
+                std = std.at[i].set(std_samples[i-2])
         return (std**2)
 
     def reparameterize_samples_dist(samples, c, samples_keys,prev_c):
         param_samples = jnp.array(samples[samples_keys[2]]).T
-        param_mean = jnp.array(samples['mu'])
-        param_std = jnp.exp(jnp.array(samples['tau']))
+        param_mean = jnp.array(samples[samples_keys[0]])
+        param_std = jnp.exp(jnp.array(samples[samples_keys[1]]))
         # print(param_samples.shape, param_mean.shape, param_std.shape)
         new_param_samples = jnp.expand_dims(c, axis=1) * jnp.expand_dims(param_mean, axis = 0)  + (param_samples - (jnp.expand_dims(prev_c,axis=1)*jnp.expand_dims(param_mean, axis = 0))) * jnp.power(param_std, (c - prev_c)[:, jnp.newaxis])
-
+        # print(c)
         theta_mu = jnp.mean(new_param_samples, axis=1)
         theta_std = jnp.std(new_param_samples, axis=1)
 
@@ -189,19 +189,20 @@ def mass_matrix_adaptation(
         """
         _, wc_state = mm_state
         covariance, count, mean = wc_final(wc_state)
+        # print("original covariance: ", covariance)
 
+        samples_keys = list(samples.keys())
         if centeredness is None:
-            centeredness = jax.random.normal(jax.random.PRNGKey(0) , shape = (8,))
+            centeredness = jax.random.normal(jax.random.PRNGKey(0) , shape = (samples[samples_keys[2]].shape[1],))
 
         if prev_c is None:
             prev_c = jnp.ones(centeredness.shape)
 
-        samples_keys = list(samples.keys())
-
         kl_value_ = lambda x: kl_value_constrained(x, samples,samples_keys,prev_c)
         res = minimize(kl_value_, centeredness, method='BFGS')
         centeredness = sigmoid(res.x)
-        # covariance = best_centered_cov(samples,centeredness,samples_keys,prev_c)
+        covariance = best_centered_cov(samples,centeredness,samples_keys,prev_c)
+        # print("new covariance: ", covariance)
 
         # Regularize the covariance matrix, see Stan
         scaled_covariance = (count / (count + 5)) * covariance

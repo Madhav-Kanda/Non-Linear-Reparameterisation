@@ -277,6 +277,7 @@ def window_adaptation(
     def logdensity_create(model, centeredness = None, varname = None):
         if centeredness is not None:
             model = reparam(model, config={varname: LocScaleReparam(centered= centeredness)})
+            # print(varname)
           
         init_params, potential_fn_gen, *_ = initialize_model(jax.random.PRNGKey(0),model,dynamic_args=True)
         logdensity = jax.tree_util.Partial(lambda position: -potential_fn_gen()(position))
@@ -291,7 +292,6 @@ def window_adaptation(
     )
     mm_init, mm_update, mm_final = mass_matrix_adaptation(is_mass_matrix_diagonal)
     da_init, da_update, da_final = dual_averaging_adaptation(target_acceptance_rate)
-
 
     def slow_final(warmup_state: WindowAdaptationState, samples,centeredness, prev_c) -> WindowAdaptationState:
         """Update the parameters at the end of a slow adaptation window.
@@ -310,24 +310,6 @@ def window_adaptation(
             new_step_size,
             new_imm_state.inverse_mass_matrix,
         ), centeredness, prev_c
-
-    def nl_reparam(last_state, logdensity_fn, samples, centeredness):
-        varname = list(samples.keys())[2]
-        prev_c = centeredness
-        slow_final_adaptation, centeredness, prev_c = slow_final(last_state[1],samples,centeredness,prev_c)
-        logdensity_f,position_new = logdensity_create(model,centeredness,varname)
-        init_state = algorithm.init(position_new, logdensity_f)
-        init_adaptation_state = adapt_init(position_new, initial_step_size)
-        init_adaptation_state = WindowAdaptationState(
-            init_adaptation_state.ss_state,
-            slow_final_adaptation.imm_state,
-            init_adaptation_state.step_size,
-            slow_final_adaptation.imm_state.inverse_mass_matrix,
-        )
-
-        return (init_state,init_adaptation_state),logdensity_f,samples,centeredness
-
-
 
 
     def one_step(carry, xs):
@@ -370,8 +352,10 @@ def window_adaptation(
         keys = jax.random.split(rng_key, num_steps)
         schedule = build_schedule(num_steps)
         step = 0
+        prev_c = None
         centeredness = None
-        window_size = jnp.array([(75,False),(25,True),(50,True),(100,True),(200,True),(50,False)])
+        varname = None
+        window_size = jnp.array([(75,0),(25,1),(50,1),(100,1),(200,1),(50,0)])
         for window in window_size:
             last_state, info = jax.lax.scan(
                 one_step_,
@@ -383,9 +367,26 @@ def window_adaptation(
             init_state = last_state[0]
             init_adaptation_state = last_state[1]
 
-            samples = info[0][0]
-            (init_state,init_adaptation_state),logdensity_fn,samples,centeredness = jax.lax.cond(window[1],nl_reparam,lambda x,y,z,w:(x,y,z,w),last_state,logdensity_fn,samples,centeredness)
-                
+            if(window[1] == 1):
+                prev_c = centeredness
+                samples = info[0][0]
+                slow_final_adaptation, centeredness, prev_c = slow_final(last_state[1],samples,centeredness,prev_c)
+                print("centeredness",centeredness)
+                # print("prev_c",prev_c)
+                if(varname == None):
+                    varname = list(samples.keys())[2]
+                logdensity_f,position_new = logdensity_create(model,centeredness,varname)
+                init_state = algorithm.init(position_new, logdensity_f)
+                new_adaptation_state = adapt_init(position_new, initial_step_size)
+
+                init_adaptation_state = WindowAdaptationState(
+                    new_adaptation_state.ss_state,
+                    slow_final_adaptation.imm_state,
+                    new_adaptation_state.step_size,
+                    slow_final_adaptation.imm_state.inverse_mass_matrix,
+                )
+                logdensity_fn = logdensity_f
+        
         last_chain_state, last_warmup_state, *_ = last_state
 
         step_size, inverse_mass_matrix = adapt_final(last_warmup_state)
