@@ -133,7 +133,7 @@ def mass_matrix_adaptation(
 
     def log_jacobian(samples, c, prev_c,samples_keys):
         log_sigma = jnp.array(samples[samples_keys[1]])
-        logJ = jnp.sum(log_sigma * ((prev_c - c)[:, jnp.newaxis]))
+        logJ = jnp.sum(log_sigma * (1 - c)[:, jnp.newaxis])
         logJ /= len(log_sigma)
         return logJ
 
@@ -152,6 +152,7 @@ def mass_matrix_adaptation(
 
         new_param_samples = jnp.expand_dims(c, axis=1) * jnp.expand_dims(param_mean, axis = 0)  + (param_samples - (jnp.expand_dims(prev_c,axis=1)*jnp.expand_dims(param_mean, axis = 0))) * jnp.power(param_std, (c - prev_c)[:, jnp.newaxis])
         std_samples = jnp.std(new_param_samples, axis=1, ddof = 1)
+        
         std_mean = jnp.std(param_mean, ddof = 1)
         std_logsd = jnp.std(jnp.log(param_std),ddof=1)
         
@@ -166,6 +167,7 @@ def mass_matrix_adaptation(
         return (std**2)
 
     def reparameterize_samples_dist(samples, c, samples_keys,prev_c):
+        # print(samples_keys[0],samples_keys[1],samples_keys[2])
         param_samples = jnp.array(samples[samples_keys[2]]).T
         param_mean = jnp.array(samples[samples_keys[0]])
         param_std = jnp.exp(jnp.array(samples[samples_keys[1]]))
@@ -173,7 +175,7 @@ def mass_matrix_adaptation(
         new_param_samples = jnp.expand_dims(c, axis=1) * jnp.expand_dims(param_mean, axis = 0)  + (param_samples - (jnp.expand_dims(prev_c,axis=1)*jnp.expand_dims(param_mean, axis = 0))) * jnp.power(param_std, (c - prev_c)[:, jnp.newaxis])
         # print(c)
         theta_mu = jnp.mean(new_param_samples, axis=1)
-        theta_std = jnp.std(new_param_samples, axis=1)
+        theta_std = jnp.std(new_param_samples, axis=1, ddof = 1)
 
         covariance_matrix = jnp.diag(theta_std ** 2)
         mvn = dist.MultivariateNormal(loc=jnp.array(theta_mu), covariance_matrix=covariance_matrix)
@@ -193,18 +195,21 @@ def mass_matrix_adaptation(
 
         samples_keys = list(samples.keys())
         if centeredness is None:
-            centeredness = jax.random.normal(jax.random.PRNGKey(0) , shape = (samples[samples_keys[2]].shape[1],))
+            centeredness = jnp.ones(samples[samples_keys[2]].shape[1],)*0.5
 
         if prev_c is None:
             prev_c = jnp.ones(centeredness.shape)
 
+        # print(samples[samples_keys[2]].shape)
         kl_value_ = lambda x: kl_value_constrained(x, samples,samples_keys,prev_c)
         res = minimize(kl_value_, centeredness, method='BFGS')
         centeredness = sigmoid(res.x)
+        # centeredness = res.x
         covariance = best_centered_cov(samples,centeredness,samples_keys,prev_c)
         # print("new covariance: ", covariance)
 
         # Regularize the covariance matrix, see Stan
+        # print(count)
         scaled_covariance = (count / (count + 5)) * covariance
         shrinkage = 1e-3 * (5 / (count + 5))
         if is_diagonal_matrix:

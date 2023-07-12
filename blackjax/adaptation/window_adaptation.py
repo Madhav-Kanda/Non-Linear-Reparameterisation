@@ -275,15 +275,14 @@ def window_adaptation(
 
     """
     def logdensity_create(model, centeredness = None, varname = None):
+        reparam_model = model
         if centeredness is not None:
-            model = reparam(model, config={varname: LocScaleReparam(centered= centeredness)})
-            # print(varname)
-          
-        init_params, potential_fn_gen, *_ = initialize_model(jax.random.PRNGKey(0),model,dynamic_args=True)
+            reparam_model = reparam(model, config={varname: LocScaleReparam(centered= centeredness)})
+         
+        init_params, potential_fn_gen, *_ = initialize_model(jax.random.PRNGKey(0),reparam_model,dynamic_args=True)
         logdensity = jax.tree_util.Partial(lambda position: -potential_fn_gen()(position))
         initial_position = init_params.z
         return (logdensity, initial_position)
-    
 
     mcmc_kernel = algorithm.build_kernel()
     adapt_init, adapt_step, adapt_final = base(
@@ -355,7 +354,8 @@ def window_adaptation(
         prev_c = None
         centeredness = None
         varname = None
-        window_size = jnp.array([(75,0),(25,1),(50,1),(100,1),(200,1),(50,0)])
+        window_size = jnp.array([(75,0),(25,1),(50,1),(100,1),(200,1),(500,1),(50,0)])
+        # window_size = jnp.array([(75,0),(875,1),(50,0)])
         for window in window_size:
             last_state, info = jax.lax.scan(
                 one_step_,
@@ -366,10 +366,12 @@ def window_adaptation(
 
             init_state = last_state[0]
             init_adaptation_state = last_state[1]
-
+    
             if(window[1] == 1):
                 prev_c = centeredness
                 samples = info[0][0]
+                # print(samples)
+                # print(samples['theta'].shape)
                 slow_final_adaptation, centeredness, prev_c = slow_final(last_state[1],samples,centeredness,prev_c)
                 print("centeredness",centeredness)
                 # print("prev_c",prev_c)
@@ -385,6 +387,7 @@ def window_adaptation(
                     new_adaptation_state.step_size,
                     slow_final_adaptation.imm_state.inverse_mass_matrix,
                 )
+                # print(init_adaptation_state)
                 logdensity_fn = logdensity_f
         
         last_chain_state, last_warmup_state, *_ = last_state
