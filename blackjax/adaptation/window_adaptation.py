@@ -376,7 +376,8 @@ def window_adaptation(
                 print("centeredness",centeredness)
                 # print("prev_c",prev_c)
                 if(varname == None):
-                    varname = list(samples.keys())[2]
+                    # varname = list(samples.keys())[2]
+                    varname = 'theta'
                 logdensity_f,position_new = logdensity_create(model,centeredness,varname)
                 init_state = algorithm.init(position_new, logdensity_f)
                 new_adaptation_state = adapt_init(position_new, initial_step_size)
