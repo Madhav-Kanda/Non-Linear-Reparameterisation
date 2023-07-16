@@ -270,8 +270,7 @@ def window_adaptation(
     def logdensity_create(model, centeredness = None, varname = None):
         reparam_model = model
         if centeredness is not None:
-            centeredness = centeredness.tolist()[0]
-            reparam_model = reparam(model, config={varname: LocScaleReparam(centeredness)})
+            reparam_model = reparam(model, config={varname: LocScaleReparam(centered= centeredness)})
          
         init_params, potential_fn_gen, *_ = initialize_model(jax.random.PRNGKey(0),reparam_model,dynamic_args=True)
         logdensity = jax.tree_util.Partial(lambda position: -potential_fn_gen()(position))
@@ -348,7 +347,7 @@ def window_adaptation(
         prev_c = None
         centeredness = None
         varname = None
-        window_size = jnp.array([(75,0),(25,1),(50,1),(100,1),(200,1),(500,1),(1000,1),(2000,1),(50,0)])
+        window_size = jnp.array([(75,0),(25,1),(50,1),(100,1),(200,1),(500,1),(1000,1),(50,0)])
         for window in window_size:
             last_state, info = jax.lax.scan(
                 one_step_,
@@ -395,7 +394,7 @@ def window_adaptation(
                 last_chain_state,
                 parameters,
             ),
-            info,logdensity_fn
+            info,logdensity_fn, centeredness
         )
 
     return AdaptationAlgorithm(run)
