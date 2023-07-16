@@ -210,6 +210,13 @@ def base(
             adaptation_state,
         )
 
+        # warmup_state = jax.lax.cond(
+        #     is_middle_window_end,
+        #     slow_final,
+        #     lambda x: x,
+        #     warmup_state,
+        # )
+
         return warmup_state
 
     def final(warmup_state: WindowAdaptationState) -> tuple[float, Array]:
@@ -347,7 +354,8 @@ def window_adaptation(
         prev_c = None
         centeredness = None
         varname = None
-        window_size = jnp.array([(75,0),(25,1),(50,1),(100,1),(200,1),(500,1),(1000,1),(50,0)])
+        window_size = jnp.array([(75,0),(25,1),(50,1),(100,1),(200,1),(500,1),(50,0)])
+        # window_size = jnp.array([(75,0),(875,1),(50,0)])
         for window in window_size:
             last_state, info = jax.lax.scan(
                 one_step_,
@@ -362,12 +370,14 @@ def window_adaptation(
             if(window[1] == 1):
                 prev_c = centeredness
                 samples = info[0][0]
-
+                # print(samples)
+                # print(samples['theta'].shape)
                 slow_final_adaptation, centeredness, prev_c = slow_final(last_state[1],samples,centeredness,prev_c)
                 print("centeredness",centeredness)
-
+                # print("prev_c",prev_c)
                 if(varname == None):
-                    varname = list(samples.keys())[2]
+                    # varname = list(samples.keys())[2]
+                    varname = 'theta'
                 logdensity_f,position_new = logdensity_create(model,centeredness,varname)
                 init_state = algorithm.init(position_new, logdensity_f)
                 new_adaptation_state = adapt_init(position_new, initial_step_size)
@@ -378,6 +388,7 @@ def window_adaptation(
                     new_adaptation_state.step_size,
                     slow_final_adaptation.imm_state.inverse_mass_matrix,
                 )
+                # print(init_adaptation_state)
                 logdensity_fn = logdensity_f
         
         last_chain_state, last_warmup_state, *_ = last_state
