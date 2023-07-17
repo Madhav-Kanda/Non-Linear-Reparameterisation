@@ -354,6 +354,8 @@ def window_adaptation(
         prev_c = None
         centeredness = None
         varname = None
+        centeredness_store = []
+        num_integration_steps = [] 
         window_size = jnp.array([(75,0),(25,1),(50,1),(100,1),(200,1),(500,1),(50,0)])
         # window_size = jnp.array([(75,0),(875,1),(50,0)])
         for window in window_size:
@@ -366,18 +368,18 @@ def window_adaptation(
 
             init_state = last_state[0]
             init_adaptation_state = last_state[1]
+            # print(info.info.num_integration_steps)
+            num_integration_steps.extend(info.info.num_integration_steps)
     
             if(window[1] == 1):
                 prev_c = centeredness
                 samples = info[0][0]
-                # print(samples)
-                # print(samples['theta'].shape)
+
                 slow_final_adaptation, centeredness, prev_c = slow_final(last_state[1],samples,centeredness,prev_c)
-                print("centeredness",centeredness)
-                # print("prev_c",prev_c)
+
                 if(varname == None):
-                    # varname = list(samples.keys())[2]
-                    varname = 'theta'
+                    varname = list(samples.keys())[2]
+                    # varname = 'theta'
                 logdensity_f,position_new = logdensity_create(model,centeredness,varname)
                 init_state = algorithm.init(position_new, logdensity_f)
                 new_adaptation_state = adapt_init(position_new, initial_step_size)
@@ -390,6 +392,8 @@ def window_adaptation(
                 )
                 # print(init_adaptation_state)
                 logdensity_fn = logdensity_f
+                centeredness_store.append(centeredness)
+                # print(centeredness)
         
         last_chain_state, last_warmup_state, *_ = last_state
 
@@ -405,7 +409,7 @@ def window_adaptation(
                 last_chain_state,
                 parameters,
             ),
-            info,logdensity_fn, centeredness
+            info,logdensity_fn, centeredness_store, num_integration_steps
         )
 
     return AdaptationAlgorithm(run)

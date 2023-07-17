@@ -151,6 +151,9 @@ def mass_matrix_adaptation(
         # param_std = jnp.ones(param_mean.shape)*2
 
         new_param_samples = jnp.expand_dims(c, axis=1) * jnp.expand_dims(param_mean, axis = 0)  + (param_samples - (jnp.expand_dims(prev_c,axis=1)*jnp.expand_dims(param_mean, axis = 0))) * jnp.power(param_std, (c - prev_c)[:, jnp.newaxis])
+        # print(param_std.shape)
+        # print(c[:, jnp.newaxis].shape)
+        # print(jnp.power(param_std, (c - prev_c)[:, jnp.newaxis]).shape)
         std_samples = jnp.std(new_param_samples, axis=1, ddof = 1)
         
         std_mean = jnp.std(param_mean, ddof = 1)
@@ -194,13 +197,13 @@ def mass_matrix_adaptation(
 
         samples_keys = list(samples.keys())
         if centeredness is None:
-            centeredness = jnp.ones(samples[samples_keys[2]].shape[1])*0.5
+            centeredness = jnp.ones(samples[samples_keys[2]].shape[1])
             # centeredness = jnp.ones(1)*0.5
 
         if prev_c is None:
             prev_c = jnp.ones(centeredness.shape)
 
-        print(centeredness.shape)
+        # print(centeredness.shape)
         kl_value_ = lambda x: kl_value_constrained(x, samples,samples_keys,prev_c)
         res = minimize(kl_value_, centeredness, method='BFGS')
         centeredness = sigmoid(res.x)
