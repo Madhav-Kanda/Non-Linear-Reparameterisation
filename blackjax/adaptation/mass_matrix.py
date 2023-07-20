@@ -185,7 +185,7 @@ def mass_matrix_adaptation(
 
         return new_param_samples, mvn, theta_mu, theta_std
 
-    def final(mm_state: MassMatrixAdaptationState, samples, centeredness, prev_c) -> MassMatrixAdaptationState:
+    def final(mm_state: MassMatrixAdaptationState, samples, centeredness, prev_c, num_evals) -> MassMatrixAdaptationState:
         """Final iteration of the mass matrix adaptation.
 
         In this step we compute the mass matrix from the covariance matrix computed
@@ -207,9 +207,10 @@ def mass_matrix_adaptation(
         kl_value_ = lambda x: kl_value_constrained(x, samples,samples_keys,prev_c)
         res = minimize(kl_value_, centeredness, method='BFGS')
         centeredness = sigmoid(res.x)
-        # centeredness = res.x
+        num_evals += res.njev
+        # print("Number of Grad evals are: ",res.njev)
+
         covariance = best_centered_cov(samples,centeredness,samples_keys,prev_c)
-        # print("new covariance: ", covariance)
 
         # Regularize the covariance matrix, see Stan
         scaled_covariance = (count / (count + 5)) * covariance
@@ -224,7 +225,7 @@ def mass_matrix_adaptation(
         ndims = jnp.shape(inverse_mass_matrix)[-1]
         new_mm_state = MassMatrixAdaptationState(inverse_mass_matrix, wc_init(ndims))
 
-        return new_mm_state, centeredness, prev_c
+        return new_mm_state, centeredness, prev_c, num_evals
 
     return init, update, final
 

@@ -292,14 +292,14 @@ def window_adaptation(
     mm_init, mm_update, mm_final = mass_matrix_adaptation(is_mass_matrix_diagonal)
     da_init, da_update, da_final = dual_averaging_adaptation(target_acceptance_rate)
 
-    def slow_final(warmup_state: WindowAdaptationState, samples,centeredness, prev_c) -> WindowAdaptationState:
+    def slow_final(warmup_state: WindowAdaptationState, samples,centeredness, prev_c, num_evals) -> WindowAdaptationState:
         """Update the parameters at the end of a slow adaptation window.
 
         We compute the value of the mass matrix and reset the mass matrix
         adapation's internal state since middle windows are "memoryless".
 
         """
-        new_imm_state, centeredness, prev_c = mm_final(warmup_state.imm_state, samples,centeredness, prev_c)
+        new_imm_state, centeredness, prev_c, num_evals = mm_final(warmup_state.imm_state, samples,centeredness, prev_c, num_evals)
         new_ss_state = da_init(da_final(warmup_state.ss_state))
         new_step_size = jnp.exp(new_ss_state.log_step_size)
 
@@ -308,7 +308,7 @@ def window_adaptation(
             new_imm_state,
             new_step_size,
             new_imm_state.inverse_mass_matrix,
-        ), centeredness, prev_c
+        ), centeredness, prev_c, num_evals
 
 
     def one_step(carry, xs):
@@ -354,6 +354,7 @@ def window_adaptation(
         prev_c = None
         centeredness = None
         varname = None
+        num_evals = 0
         centeredness_store = []
         num_integration_steps = [] 
         window_size = jnp.array([(75,0),(25,1),(50,1),(100,1),(200,1),(500,1),(50,0)])
@@ -375,7 +376,7 @@ def window_adaptation(
                 prev_c = centeredness
                 samples = info[0][0]
 
-                slow_final_adaptation, centeredness, prev_c = slow_final(last_state[1],samples,centeredness,prev_c)
+                slow_final_adaptation, centeredness, prev_c, num_evals = slow_final(last_state[1],samples,centeredness,prev_c, num_evals)
 
                 if(varname == None):
                     varname = list(samples.keys())[2]
@@ -409,7 +410,7 @@ def window_adaptation(
                 last_chain_state,
                 parameters,
             ),
-            info,logdensity_fn, centeredness_store, num_integration_steps
+            info,logdensity_fn, centeredness_store, num_integration_steps, num_evals
         )
 
     return AdaptationAlgorithm(run)
