@@ -264,7 +264,7 @@ def window_adaptation(
     target_acceptance_rate
         The acceptance rate that we target during step size adaptation.
     progress_bar
-        Whether we should display a progress bar.
+        Whether we should display a progress bar.x
     **extra_parameters
         The extra parameters to pass to the algorithm, e.g. the number of
         integration steps for HMC.
@@ -357,8 +357,13 @@ def window_adaptation(
         num_evals = 0
         centeredness_store = []
         num_integration_steps = [] 
-        window_size = jnp.array([(75,0),(25,1),(50,1),(100,1),(200,1),(500,1),(50,0)])
-        # window_size = jnp.array([(75,0),(875,1),(50,0)])
+        window_size = [(75,0)]
+        for i in range(0,10):
+            window_size.append((80,1))
+        window_size.append((75,1))
+        window_size.append((50,0))
+
+        window_size = jnp.array(window_size)
         for window in window_size:
             last_state, info = jax.lax.scan(
                 one_step_,
@@ -381,6 +386,8 @@ def window_adaptation(
                 if(varname == None):
                     varname = list(samples.keys())[2]
                     # varname = 'theta'
+                
+                print(centeredness)
                 logdensity_f,position_new = logdensity_create(model,centeredness,varname)
                 init_state = algorithm.init(position_new, logdensity_f)
                 new_adaptation_state = adapt_init(position_new, initial_step_size)
@@ -394,7 +401,6 @@ def window_adaptation(
                 # print(init_adaptation_state)
                 logdensity_fn = logdensity_f
                 centeredness_store.append(centeredness)
-                # print(centeredness)
         
         last_chain_state, last_warmup_state, *_ = last_state
 
