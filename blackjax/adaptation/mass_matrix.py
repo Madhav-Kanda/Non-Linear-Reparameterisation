@@ -139,8 +139,8 @@ def mass_matrix_adaptation(
 
 
     def kl_value_constrained(centeredness,samples, samples_keys,prev_c):
-        reparam_sample, mvn, mu_theta, std_theta = reparameterize_samples_dist(samples, centeredness, samples_keys, prev_c)
-        jacobian_log = log_jacobian(samples, centeredness,samples_keys)
+        reparam_sample, mvn, mu_theta, std_theta = reparameterize_samples_dist(samples, sigmoid(centeredness), samples_keys, prev_c)
+        jacobian_log = log_jacobian(samples, sigmoid(centeredness),samples_keys)
         kl = -mvn.log_prob(reparam_sample.T).mean() + jacobian_log    
         return kl  
 
@@ -151,6 +151,9 @@ def mass_matrix_adaptation(
         # param_std = jnp.ones(param_mean.shape)*2
 
         new_param_samples = jnp.expand_dims(c, axis=1) * jnp.expand_dims(param_mean, axis = 0)  + (param_samples - (jnp.expand_dims(prev_c,axis=1)*jnp.expand_dims(param_mean, axis = 0))) * jnp.power(param_std, (c - prev_c)[:, jnp.newaxis])
+        # print(param_std.shape)
+        # print(c[:, jnp.newaxis].shape)
+        # print(jnp.power(param_std, (c - prev_c)[:, jnp.newaxis]).shape)
         std_samples = jnp.std(new_param_samples, axis=1, ddof = 1)
         
         std_mean = jnp.std(param_mean, ddof = 1)
@@ -202,17 +205,9 @@ def mass_matrix_adaptation(
 
         # print(centeredness.shape)
         kl_value_ = lambda x: kl_value_constrained(x, samples,samples_keys,prev_c)
-        num_epochs = 5
-        lr = 3e-2
-        for i in range(num_epochs):
-            grad = jax.grad(kl_value_)
-            centeredness -= lr*grad(centeredness)
-            centeredness = jnp.clip(centeredness, 0, 1)
-
-        # res = minimize(kl_value_, centeredness, method='BFGS')
-        # centeredness = sigmoid(res.x)
-        # num_evals += res.njev
-        num_evals+= num_epochs
+        res = minimize(kl_value_, centeredness, method='BFGS')
+        centeredness = sigmoid(res.x)
+        num_evals += res.njev
         # print("Number of Grad evals are: ",res.njev)
 
         covariance = best_centered_cov(samples,centeredness,samples_keys,prev_c)
