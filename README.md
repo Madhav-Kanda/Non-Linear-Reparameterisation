@@ -51,7 +51,7 @@ At times MCMC algorithms have trouble sampling from distributions. One such exam
     - $x$ ~ $N((1-c_{i}) \mu, \sigma^{(1-c_{i})})$
  
 ### Results
-- The Image shows the comparison of the centeredness achieved by our method v/s Variationally Inferred Parameterisation (VIP). It is evident that our method was able to converge to the true centeredness of the model.
+- The Image shows the comparison of the centeredness achieved by our method v/s Variationally Inferred Parameterisation (VIP). It is evident that our method converged to the true centeredness of the model.
   <img width="541" alt="image" src="https://github.com/Madhav-Kanda/Non-Linear-Reparameterisation/assets/76394914/04b12af6-4255-47ae-84e9-d30c589ea19e">
 - The Effective Sample Size per gradient evaluation for our method turns out to be better than VIP.
     | Parameter  | ESS/∇ (vip)  | ESS/∇ (our)  |
