@@ -5,6 +5,33 @@
 
 This repository contains the code for Windowed Non Linear Reparameterization built on top of Blacjax. This work was done as a part of summer internship at Aalto University under the guidance of Dr. Nikolas Siccha and Prof. Aki Vehtari.
 
+### Usage Example
+
+#### Creating Numpyro model for sampling using Blackjax
+```python
+def ll_pdf(centeredness, J, tau, mu, theta):
+    return dist.Normal(jnp.full(J,mu*(1-centeredness)), jnp.exp(tau*(1-centeredness))).log_prob(theta) - dist.Normal(jnp.full(J,mu), jnp.exp(tau)).log_prob(theta)
+
+def funnel(J=d, c = true_centeredness):
+    mu = numpyro.sample('mu', dist.Normal(0, 1))
+    tau = numpyro.sample('tau', dist.Normal(0,1))
+    theta = numpyro.sample('theta', dist.Normal(jnp.full(J,mu), jnp.exp(tau)))
+    numpyro.factor('theta_ll', ll_pdf(c, J, tau, mu, theta))
+```
+
+#### Running the inference to obtain the estimated centeredness
+
+```python
+num_warmup = 1000
+
+adapt = blackjax.window_adaptation(blackjax.nuts, funnel)
+key = jax.random.PRNGKey(0)
+(last_state, parameters), intermediate_states,logdensity_fn, estimated_centeredness, num_warmup_steps, num_evals  = adapt.run(key, num_warmup)
+
+```
+
+----------------------------------------------------
+
 ### Why:
 
 At times MCMC algorithms have trouble sampling from distributions. One such example is Neal’s funnel in which due to strong non-linear dependence between latent variables. Non-centering the model removes this dependence, converting the funnel into a spherical Gaussian distribution.
